@@ -7,26 +7,26 @@
 # For further information on the license, see the LICENSE.txt file        #
 # For further information please visit http://www.aiida.net               #
 ###########################################################################
+"""Tests for `verdi`."""
 from __future__ import division
 from __future__ import print_function
 from __future__ import absolute_import
-from aiida.common.exceptions import NotExistent
-from aiida.orm.implementation import Workflow, get_workflow_info
-from aiida.orm.implementation.general.workflow import WorkflowKillError, WorkflowUnkillable
+from click.testing import CliRunner
+
+from aiida import get_version
+from aiida.backends.testbase import AiidaTestCase
+from aiida.cmdline.commands import cmd_verdi
 
 
+class TestVerdi(AiidaTestCase):
+    """Tests for `verdi run`."""
 
-def kill_from_pk(pk, verbose=False):
-    """
-    Kills a workflow without loading the class, useful when there was a problem
-    and the workflow definition module was changed/deleted (and the workflow
-    cannot be reloaded).
+    def setUp(self):
+        super(TestVerdi, self).setUp()
+        self.cli_runner = CliRunner()
 
-    :param pk: the principal key (id) of the workflow to kill
-    :param verbose: True to print the pk of each subworkflow killed
-    """
-    try:
-        Workflow.get_subclass_from_pk(pk).kill(verbose=verbose)
-    except IndexError:
-        raise NotExistent("No workflow with pk= {} found.".format(pk))
-
+    def test_verdi_version(self):
+        """Regression test for #2238: verify that `verdi --version` prints the current version"""
+        result = self.cli_runner.invoke(cmd_verdi.verdi, ['--version'])
+        self.assertIsNone(result.exception, result.output)
+        self.assertIn(get_version(), result.output)

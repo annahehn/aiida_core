@@ -67,7 +67,7 @@ def has_pycifrw():
     """
     :return: True if the PyCifRW module can be imported, False otherwise.
     """
-    # pylint: disable=unused-variable
+    # pylint: disable=unused-variable,unused-import
     try:
         import CifFile
         from CifFile import CifBlock
@@ -119,10 +119,7 @@ def _get_aiida_structure_ase_inline(cif, **kwargs):
     from aiida.orm.data.parameter import ParameterData
     from aiida.orm.data.structure import StructureData
 
-    if 'parameters' in kwargs:
-        parameters = kwargs['parameters']
-    else:
-        parameters = {}
+    parameters = kwargs.get('parameters', {})
 
     if isinstance(parameters, ParameterData):
         parameters = parameters.get_dict()
@@ -149,10 +146,7 @@ def _get_aiida_structure_pymatgen_inline(cif, **kwargs):
     from aiida.orm.data.parameter import ParameterData
     from aiida.orm.data.structure import StructureData
 
-    if 'parameters' in kwargs:
-        parameters = kwargs['parameters']
-    else:
-        parameters = {}
+    parameters = kwargs.get('parameters', {})
 
     if isinstance(parameters, ParameterData):
         parameters = parameters.get_dict()
@@ -420,6 +414,7 @@ def parse_formula(formula):
     return contents
 
 
+# pylint: disable=abstract-method,too-many-public-methods
 # Note:  Method 'query' is abstract in class 'Node' but is not overridden
 class CifData(SinglefileData):
     """
@@ -512,16 +507,16 @@ class CifData(SinglefileData):
                 return (instance, True)
             instance = cls(file=filename)
             return (instance, True)
-        else:
-            if len(cifs) > 1:
-                if use_first:
-                    return (cifs[0], False)
-                else:
-                    raise ValueError("More than one copy of a CIF file "
-                                     "with the same MD5 has been found in "
-                                     "the DB. pks={}".format(",".join([str(i.pk) for i in cifs])))
-            else:
-                return cifs[0], False
+
+        if len(cifs) > 1:
+            if use_first:
+                return (cifs[0], False)
+
+            raise ValueError("More than one copy of a CIF file "
+                             "with the same MD5 has been found in "
+                             "the DB. pks={}".format(",".join([str(i.pk) for i in cifs])))
+
+        return cifs[0], False
 
     # pylint: disable=attribute-defined-outside-init
     @property
@@ -731,26 +726,32 @@ class CifData(SinglefileData):
     @property
     def has_partial_occupancies(self):
         """
-        Check if there are float values in the atomic occupancies
+        Return if the cif data contains partial occupancies
 
-        :returns: True if there are partial occupancies, False otherwise
+        A partial occupancy is defined as site with an occupancy that differs from unity, within a precision of 1E-6
+
+        .. note: occupancies that cannot be parsed into a float are ignored
+
+        :return: True if there are partial occupancies, False otherwise
         """
-        epsilon = 1e-6
+        import re
+
         tag = '_atom_site_occupancy'
+
+        epsilon = 1e-6
         partial_occupancies = False
+
         for datablock in self.values.keys():
             if tag in self.values[datablock].keys():
-                for site in self.values[datablock][tag]:
-                    # find the float number in the string
-                    bracket = site.find('(')
-                    if bracket == -1:
-                        # no bracket found
-                        if abs(float(site) - 1) > epsilon:
-                            partial_occupancies = True
+                for position in self.values[datablock][tag]:
+                    try:
+                        # First remove any parentheses to support value like 1.134(56) and then cast to float
+                        occupancy = float(re.sub(r'[\(\)]', '', position))
+                    except ValueError:
+                        pass
                     else:
-                        # bracket, cut string
-                        if abs(float(site[0:bracket]) - 1) > epsilon:
-                            partial_occupancies = True
+                        if abs(occupancy - 1) > epsilon:
+                            return True
 
         return partial_occupancies
 
@@ -766,10 +767,50 @@ class CifData(SinglefileData):
         for datablock in self.values.keys():
             if tag in self.values[datablock].keys():
                 for value in self.values[datablock][tag]:
-                    if value != '.' and value != '?' and value != '0':
+                    if value not in ['.', '?', '0']:
                         return True
 
         return False
+
+    @property
+    def has_undefined_atomic_sites(self):
+        """
+        Return whether the cif data contains any undefined atomic sites.
+
+        An undefined atomic site is defined as a site where at least one of the fractional coordinates specified in the
+        `_atom_site_fract_*` tags, cannot be successfully interpreted as a float. If the cif data contains any site that
+        matches this description, or it does not contain any atomic site tags at all, the cif data is said to have
+        undefined atomic sites.
+
+        :return: boolean, True if no atomic sites are defined or if any of the defined sites contain undefined positions
+            and False otherwise
+        """
+        import re
+
+        tag_x = '_atom_site_fract_x'
+        tag_y = '_atom_site_fract_y'
+        tag_z = '_atom_site_fract_z'
+
+        # Some CifData files do not even contain a single `_atom_site_fract_*` tag
+        has_tags = False
+
+        for datablock in self.values.keys():
+            for tag in [tag_x, tag_y, tag_z]:
+                if tag in self.values[datablock].keys():
+                    for position in self.values[datablock][tag]:
+
+                        # The CifData contains at least one `_atom_site_fract_*` tag
+                        has_tags = True
+
+                        try:
+                            # First remove any parentheses to support value like 1.134(56) and then cast to float
+                            float(re.sub(r'[\(\)]', '', position))
+                        except ValueError:
+                            # Position cannot be converted to a float value, so we have undefined atomic sites
+                            return True
+
+        # At this point the file either has no tags at all, or it does and all coordinates were valid floats
+        return not has_tags
 
     @property
     def has_atomic_sites(self):
@@ -798,16 +839,18 @@ class CifData(SinglefileData):
     def has_unknown_species(self):
         """
         Returns whether the cif contains atomic species that are not recognized by AiiDA.
-        The known species are taken from the elements dictionary in aiida.common.constants.
-        If any of the formula of the cif data contain species that are not in that elements
-        dictionary, the function will return True and False in all other cases. If there is
-        no formulae to be found, it will return None
+
+        The known species are taken from the elements dictionary in `aiida.common.constants`, with the exception of
+        the "unknown" placeholder element with symbol 'X', as this could not be used to construct a real structure.
+        If any of the formula of the cif data contain species that are not in that elements dictionary, the function
+        will return True and False in all other cases. If there is no formulae to be found, it will return None
 
         :returns: True when there are unknown species in any of the formulae, False if not, None if no formula found
         """
         from aiida.common.constants import elements
 
-        known_species = [element['symbol'] for element in elements.values()]
+        # Get all the elements known by AiiDA, excluding the "unknown" element with symbol 'X'
+        known_species = [element['symbol'] for element in elements.values() if element['symbol'] != 'X']
 
         for formula in self.get_formulae():
 

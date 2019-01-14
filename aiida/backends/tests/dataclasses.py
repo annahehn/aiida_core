@@ -776,12 +776,84 @@ _tag   {}
             # but it does not have a file
             with self.assertRaises(AttributeError):
                 a.filename
-            #now it has
+            # now it has
             a.set_file(tmpf.name)
             a.parse()
             a.filename
 
         self.assertNotEquals(f1, f2)
+
+    @unittest.skipIf(not has_pycifrw(), "Unable to import PyCifRW")
+    def test_has_partial_occupancies(self):
+        import tempfile
+        from aiida.orm.data.cif import CifData
+
+        tests = [
+            # Unreadable occupations should not count as a partial occupancy
+            ('O 0.5 0.5(1) 0.5 ?', False),
+            # The default epsilon for deviation of unity for an occupation to be considered partial is 1E-6
+            ('O 0.5 0.5(1) 0.5 1.0(000000001)', False),
+            # Partial occupancies should be able to deal with parentheses in the value
+            ('O 0.5 0.5(1) 0.5 1.0(000132)', True),
+            # Partial occupancies should be able to deal with parentheses in the value
+            ('O 0.5 0.5(1) 0.5 0.9(0000132)', True),
+        ]
+
+        for test_string, result in tests:
+            with tempfile.NamedTemporaryFile(mode='w+') as handle:
+                handle.write("""
+                    data_test
+                    loop_
+                    _atom_site_label
+                    _atom_site_fract_x
+                    _atom_site_fract_y
+                    _atom_site_fract_z
+                    _atom_site_occupancy
+                    {}
+                """.format(test_string))
+                handle.flush()
+                cif = CifData(file=handle.name)
+                self.assertEqual(cif.has_partial_occupancies, result)
+
+    @unittest.skipIf(not has_pycifrw(), "Unable to import PyCifRW")
+    def test_has_unknown_species(self):
+        import tempfile
+        from aiida.orm.data.cif import CifData
+
+        tests = [
+            ('H2 O', False),  # No unknown species
+            ('OsAx', True),   # Ax is an unknown specie
+            ('UX', True),     # X counts as unknown specie despite being defined in aiida.common.constants.elements
+            ('', None),       # If no chemical formula is defined, None should be returned
+        ]
+
+        for formula, result in tests:
+            with tempfile.NamedTemporaryFile(mode='w+') as handle:
+                formula_string = "_chemical_formula_sum '{}'".format(formula) if formula else '\n'
+                handle.write("""data_test\n{}\n""".format(formula_string))
+                handle.flush()
+                cif = CifData(file=handle.name)
+                self.assertEqual(cif.has_unknown_species, result, formula_string)
+
+    @unittest.skipIf(not has_pycifrw(), "Unable to import PyCifRW")
+    def test_has_undefined_atomic_sites(self):
+        import tempfile
+        from aiida.orm.data.cif import CifData
+
+        tests = [
+            ('C 0.0 0.0 0.0', False),  # Should return False because all sites have valid coordinates
+            ('C 0.0 0.0 ?', True),     # Should return True because one site has an undefined coordinate
+            ('', True),                # Should return True if no sites defined at all
+        ]
+
+        for test_string, result in tests:
+            with tempfile.NamedTemporaryFile(mode='w+') as handle:
+                base = 'loop_\n_atom_site_label\n_atom_site_fract_x\n_atom_site_fract_y\n_atom_site_fract_z'
+                atomic_site_string = '{}\n{}'.format(base, test_string) if test_string else ''
+                handle.write("""data_test\n{}\n""".format(atomic_site_string))
+                handle.flush()
+                cif = CifData(file=handle.name)
+                self.assertEqual(cif.has_undefined_atomic_sites, result)
 
 
 class TestKindValidSymbols(AiidaTestCase):

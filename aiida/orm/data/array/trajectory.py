@@ -443,11 +443,6 @@ class TrajectoryData(ArrayData):
 
         for idx in indices:
             return_string += "PRIMVEC {}\n".format(idx + 1)
-            #~ structure = self.get_step_structure(index=idx)
-            #~ sites = structure.sites
-            #~ if structure.is_alloy or structure.has_vacancies:
-            #~ raise NotImplementedError("XSF for alloys or systems with "
-            #~ "vacancies not implemented.")
             for cell_vector in cells[idx]:
                 return_string += ' '.join(["{:18.5f}".format(i) for i in cell_vector])
                 return_string += "\n"

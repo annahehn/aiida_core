@@ -174,7 +174,7 @@ def _generate_node_label(node, node_attr, show_pk):
 
 def calc_info(calc_node):
     """Return a string with the summary of the state of a CalculationNode."""
-    from aiida.orm.node.process import CalcFunctionNode, CalcJobNode, WorkFunctionNode, WorkChainNode
+    from aiida.orm.node.process import CalculationNode, CalcJobNode, WorkChainNode, WorkflowNode
 
     if isinstance(calc_node, WorkChainNode):
         plabel = calc_node.process_label
@@ -190,7 +190,7 @@ def calc_info(calc_node):
         clabel = type(calc_node).__name__
         cstate = str(calc_node.get_state())
         string = u'{} <pk={}> [{}]'.format(clabel, calc_node.pk, cstate)
-    elif isinstance(calc_node, (WorkFunctionNode, CalcFunctionNode)):
+    elif isinstance(calc_node, (CalculationNode, WorkflowNode)):
         plabel = calc_node.process_label
         pstate = calc_node.process_state
         string = u'{} <pk={}> [{}]'.format(plabel, calc_node.pk, pstate)
@@ -246,7 +246,7 @@ def format_tree_descending(tree, prefix=u"", pos=-1):
     if isinstance(tree, tuple):
         _, value = tree
         num_entries = len(value)
-        if pos == -1 or pos == 2:
+        if pos in [-1, 2]:
             new_prefix = u'{}    '.format(prefix)
         else:
             new_prefix = u'{}\u2502   '.format(prefix)

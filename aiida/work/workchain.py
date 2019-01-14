@@ -23,7 +23,7 @@ from aiida.common.lang import override
 from aiida.common.lang import classproperty
 from aiida.orm import Node
 from aiida.orm.node.process import WorkChainNode
-from aiida.orm.utils import load_node, load_workflow
+from aiida.orm.utils import load_node
 
 from .awaitable import AwaitableTarget, AwaitableAction, construct_awaitable
 from .context import ToContext, assign_, append_
@@ -173,14 +173,14 @@ class WorkChain(Process):
         # If the stepper said we are finished or the result is an ExitCode, we exit by returning
         if finished or isinstance(result, ExitCode):
             return result
-        else:
-            if isinstance(stepper_result, ToContext):
-                self.to_context(**stepper_result)
 
-            if self._awaitables:
-                return Wait(self._do_step, 'Waiting before next step')
+        if isinstance(stepper_result, ToContext):
+            self.to_context(**stepper_result)
 
-            return Continue(self._do_step)
+        if self._awaitables:
+            return Wait(self._do_step, 'Waiting before next step')
+
+        return Continue(self._do_step)
 
     def _store_nodes(self, data):
         """
@@ -256,37 +256,6 @@ class WorkChain(Process):
             value = {entry.link_label: entry.node for entry in node.get_outgoing()}
         else:
             value = node
-
-        if awaitable.action == AwaitableAction.ASSIGN:
-            self.ctx[awaitable.key] = value
-        elif awaitable.action == AwaitableAction.APPEND:
-            self.ctx.setdefault(awaitable.key, []).append(value)
-        else:
-            assert "invalid awaitable action '{}'".format(awaitable.action)
-
-        self.remove_awaitable(awaitable)
-        if self.state == ProcessState.WAITING and not self._awaitables:
-            self.resume()
-
-    def on_legacy_workflow_finished(self, awaitable, pk):
-        """
-        Callback function called by the runner when the legacy workflow instance identified by pk
-        is completed. The awaitable will be effectuated on the context of the workchain and
-        removed from the internal list. If all awaitables have been dealt with, the workchain
-        process is resumed
-
-        :param awaitable: an Awaitable instance
-        :param pk: the pk of the awaitable's target
-        """
-        try:
-            workflow = load_workflow(pk=pk)
-        except ValueError:
-            raise ValueError('provided pk<{}> could not be resolved to a valid Workflow instance'.format(pk))
-
-        if awaitable.outputs:
-            value = workflow.get_results()
-        else:
-            value = workflow
 
         if awaitable.action == AwaitableAction.ASSIGN:
             self.ctx[awaitable.key] = value

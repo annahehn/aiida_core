@@ -32,7 +32,7 @@ from aiida.common.utils import get_repository_folder
 # Otherwise, tries to make everything only readable and writable by the user.
 GROUP_WRITABLE = True
 
-VALID_SECTIONS = ['node', 'workflow']
+VALID_SECTIONS = ['node']
 
 
 def find_path(root, dir_name):
@@ -51,7 +51,7 @@ def find_path(root, dir_name):
     raise OSError('No directory found')
 
 
-class Folder(object):
+class Folder(object):  # pylint: disable=useless-object-inheritance
     """
     A class to manage generic folders, avoiding to get out of
     specific given folder borders.

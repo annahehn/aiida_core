@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# pylint: disable=cyclic-import
 """ORM class for CalcJobNode."""
 from __future__ import absolute_import
 from __future__ import print_function
@@ -376,6 +377,21 @@ class CalcJobNode(CalculationNode):
 
         return parent_dict
 
+    def _set_internal(self, arguments, allow_hidden=False):
+        """
+        Works as self.set(), but takes a dictionary as the 'arguments' variable,
+        instead of reading it from the ``kwargs``; moreover, it allows to specify
+        allow_hidden to True. In this case, if a a key starts with and
+        underscore, as for instance ``_state``, it will not call
+        the function ``set__state`` but rather ``_set_state``.
+        """
+        for key, value in copy.copy(arguments).items():
+            if key in self.options and value is not None:
+                arguments.pop(key)
+                self.set_option(key, value)
+
+        super(CalcJobNode, self)._set_internal(arguments, allow_hidden=allow_hidden)
+
     def store(self, *args, **kwargs):
         """
         Override the store() method to store also the calculation in the NEW
@@ -676,7 +692,10 @@ class CalcJobNode(CalculationNode):
         if not isinstance(value, valid_type):
             raise TypeError('value is of invalid type {}'.format(type(value)))
 
-        self._set_attr(attribute_key, value)
+        if name == 'computer':
+            self.set_computer(value)
+        else:
+            self._set_attr(attribute_key, value)
 
     def get_options(self, only_actually_set=False):
         """
@@ -1743,12 +1762,13 @@ class CalcJobNode(CalculationNode):
 
     def _get_authinfo(self):
         from aiida.common.exceptions import NotExistent
+        from aiida.orm.authinfos import AuthInfo
 
         computer = self.get_computer()
         if computer is None:
             raise NotExistent("No computer has been set for this calculation")
 
-        return self.backend.authinfos.get(computer=computer, user=self.get_user())
+        return AuthInfo.from_backend_entity(self.backend.authinfos.get(computer=computer, user=self.get_user()))
 
     def _get_transport(self):
         """
@@ -1874,7 +1894,7 @@ class CalcJobNode(CalculationNode):
         from aiida.orm import DataFactory
         from aiida.common.datastructures import CodeInfo, code_run_modes
         from aiida.orm.code import Code
-        from aiida.orm.utils import load_node
+        from aiida.orm.utils import load_node, CalculationFactory
         import aiida.common.json as json
 
         computer = self.get_computer()
@@ -1884,7 +1904,21 @@ class CalcJobNode(CalculationNode):
 
         inputdict = {entry.link_label: entry.node for entry in inputs}
 
-        calcinfo = self._prepare_for_submission(folder, inputdict)
+        # THIS IS A MASSIVE HACK: the `_prepare_for_submission` is only implemented for the sub class but this instance
+        # will be a plain `CalcJobNode`, so we have to recreate an instance of the actual sub class to call the method.
+        from importlib import import_module
+        from aiida.plugins.entry_point import is_valid_entry_point_string, load_entry_point_from_string
+
+        if is_valid_entry_point_string(self.process_type):
+            calc_class = load_entry_point_from_string(self.process_type)
+        else:
+            module_name, class_name = self.process_type.rsplit('.', 1)
+            module = import_module(module_name)
+            calc_class = getattr(module, class_name)
+
+        calc_instance = calc_class(dbnode=self._dbnode)
+
+        calcinfo = calc_instance._prepare_for_submission(folder, inputdict)
         s = computer.get_scheduler()
 
         for code in codes:
@@ -2082,7 +2116,7 @@ class CalcJobNode(CalculationNode):
 
         for (remote_computer_uuid, remote_abs_path, dest_rel_path) in remote_copy_list:
             try:
-                remote_computer = self.backend.computers.get(uuid=remote_computer_uuid)
+                remote_computer = Computer.objects.get(uuid=remote_computer_uuid)
             except NotExistent:
                 raise PluginInternalError("[presubmission of calc {}] "
                                           "The remote copy requires a computer with UUID={}"
@@ -2198,7 +2232,7 @@ class CalcJobNode(CalculationNode):
                 with io.open(os.path.join(subfolder.abspath, '_aiida_remote_copy_list.txt'), 'w', encoding='utf8') as f:
                     for (remote_computer_uuid, remote_abs_path, dest_rel_path) in remote_copy_list:
                         try:
-                            remote_computer = self.backend.computers.get(uuid=remote_computer_uuid)
+                            remote_computer = Computer.objects.get(uuid=remote_computer_uuid)
                         except NotExistent:
                             remote_computer = "[unknown]"
                         f.write(u"* I WOULD REMOTELY COPY "
@@ -2211,7 +2245,7 @@ class CalcJobNode(CalculationNode):
                         os.path.join(subfolder.abspath, '_aiida_remote_symlink_list.txt'), 'w', encoding='utf8') as f:
                     for (remote_computer_uuid, remote_abs_path, dest_rel_path) in remote_symlink_list:
                         try:
-                            remote_computer = self.backend.computers.get(uuid=remote_computer_uuid)
+                            remote_computer = Computer.objects.get(uuid=remote_computer_uuid)
                         except NotExistent:
                             remote_computer = "[unknown]"
                         f.write(u"* I WOULD PUT SYMBOLIC LINKS FOR "
